@@ -5,63 +5,79 @@ from sensor_reading import read_color, get_color_name, read_sensor, voltage_to_d
 from gpiozero.pins.lgpio import LGPIOFactory
 from gpiozero import Device
 
+# Set up the LGPIO pin factory for GPIO operations
 Device.pin_factory = LGPIOFactory()
 
-# Speed settings
-MAX_SPEED = 15  # Cap max speed at 15
-MIN_SPEED = 7  # Set a minimum speed to avoid stopping unnecessarily
-TARGET_MIN_DISTANCE = 25  # Minimum acceptable distance in cm (target is 30 to 40 cm)
-TARGET_MAX_DISTANCE = 40  # Maximum acceptable distance in cm
-STOP_DISTANCE = 20  # Stop if distance is below 20 cm
-TURN_SPEED = 12  # Set turning speed for line correction
-STRAIGHT_SPEED = 12  # Base speed for moving forward
+# Speed and distance settings
+MAX_SPEED = 12           # Maximum speed limit to try to catch up
+MIN_SPEED = 7            # Minimum speed to avoid stopping prematurely
+TARGET_MIN_DISTANCE = 25 # Lower limit of acceptable distance from the object in cm (aim for 20-40 cm range)
+TARGET_MAX_DISTANCE = 40 # Upper limit of acceptable distance in cm
+STOP_DISTANCE = 20       # Distance threshold (cm) to stop if an obstacle is too close
+TURN_SPEED = 12          # Speed setting for line-following turns
+STRAIGHT_SPEED = 12      # Base speed for moving forward on the line
 
 def adjust_speed(distance):
-    """Adjust speed based on the distance from the object in front."""
+    """
+    Adjusts speed based on the measured distance to the object in front.
+    - Stops the robot if the object is too close (< STOP_DISTANCE).
+    - Reduces speed if the object is within TARGET_MIN_DISTANCE.
+    - Increases speed if the object is beyond TARGET_MAX_DISTANCE.
+    
+    Args:
+        distance (float): Distance from the object in front in centimeters.
+
+    Returns:
+        float: The adjusted speed based on distance.
+    """
     if distance <= STOP_DISTANCE:
-        # Too close - stop the robot
         speed = 0
         print(f"Distance: {distance} cm - Too close, stopping the robot.")
     elif distance < TARGET_MIN_DISTANCE:
-        # Too close - reduce speed to maintain safe distance
         speed = max(MIN_SPEED, STRAIGHT_SPEED - (TARGET_MIN_DISTANCE - distance) * 0.2)
         print(f"Distance: {distance} cm - Reducing speed to maintain safe distance.")
     elif distance > TARGET_MAX_DISTANCE:
-        # Too far - increase speed to catch up, capped at MAX_SPEED
         speed = min(MAX_SPEED, STRAIGHT_SPEED + (distance - TARGET_MAX_DISTANCE) * 0.2)
         print(f"Distance: {distance} cm - Increasing speed to catch up.")
     else:
-        # Within the target range - maintain base speed
         speed = STRAIGHT_SPEED
         print(f"Distance: {distance} cm - Maintaining base speed.")
     
     return speed
 
-# Function to drive the robot forward with color detection and distance-based speed control
 def drive_forward_with_color_detection(duration, sensor_channel=0):
+    """
+    Drives the robot forward with color detection for line-following and distance-based speed control.
+    Adjusts speed based on distance to maintain a safe following distance, and corrects direction 
+    based on detected colors (red or blue) to follow a line.
+
+    Args:
+        duration (int): Time in seconds for which to drive forward.
+        sensor_channel (int): ADC channel for distance sensor input (default: 0).
+    """
     print("Driving forward with color detection and distance control")
     start_time = time.time()
 
     while time.time() - start_time < duration:
-        # Measure distance to the robot in front and adjust speed accordingly
+        # Measure the distance to the object in front and adjust speed accordingly
         distance = voltage_to_distance(read_sensor(sensor_channel))
         adjusted_speed = adjust_speed(distance)
 
-        # If the speed is 0, it means the robot should stop and wait
+        # Stop the robot if it is too close to the object in front
         if adjusted_speed == 0:
             stop_motors()
             time.sleep(0.1)
             continue
 
-        # Get encoder values for both motors
+        # Read encoder values for precise motor control
         left_count, right_count = get_encoder_values()
 
-        # Get the color readings and determine color
+        # Get the color readings for line-following
         color_rgb = read_color()
         color_name = get_color_name(color_rgb)
         print(f"Detected color: {color_name}")
 
-        # Continue turning while red or blue is detected
+        # Turn based on detected colors (line-following logic)
         while color_name == "red" or color_name == "blue":
             if color_name == "red":
                 print("Red detected, turning right until unknown color is sensed")
@@ -72,33 +88,36 @@ def drive_forward_with_color_detection(duration, sensor_channel=0):
                 motor_left_forward(TURN_SPEED - 11)
                 motor_right_forward(TURN_SPEED)
 
-            # Check if the color changes to "unknown"
+            # Continuously check for color change to stop turning
             color_rgb = read_color()
             color_name = get_color_name(color_rgb)
-            time.sleep(0.05)  # Short delay for smooth corrections
+            time.sleep(0.05)  # Small delay for smooth direction correction
 
-        # If neither color is detected, continue moving forward with slight adjustments based on encoder feedback
+        # If no color is detected, continue forward with slight encoder-based adjustments
         print("No red or blue detected, moving forward slowly")
         if left_count > right_count:
-            motor_left_forward(adjusted_speed - 3)  # Adjusted for more responsive correction
+            motor_left_forward(adjusted_speed - 4)  # Reduce left motor speed for balanced movement (change the number based on how your robot drives)
             motor_right_forward(adjusted_speed)
         elif right_count > left_count:
             motor_left_forward(adjusted_speed)
-            motor_right_forward(adjusted_speed - 3)  # Adjusted for more responsive correction
+            motor_right_forward(adjusted_speed - 2)  # Reduce right motor speed (change the number based on how your robot drives)
         else:
             motor_left_forward(adjusted_speed)
             motor_right_forward(adjusted_speed)
 
-        # Small delay to prevent rapid corrections
+        # Small delay to prevent rapid, erratic corrections
         time.sleep(0.05)
 
+    # Stop the robot after completing the drive duration
     stop_motors()
     print("Stopped")
 
-# Autonomous driving sequence
 def autonomous_drive():
-    """Autonomous driving sequence with integrated color detection, encoder stability, and distance control."""
-    drive_forward_with_color_detection(180)  # Drive forward for 3 minutes with integrated control
+    """
+    Initiates the autonomous driving sequence, with integrated color detection, encoder-based 
+    direction stability, and distance control to maintain safe following distance.
+    """
+    drive_forward_with_color_detection(300)  # Drive forward for 5 minutes
 
 try:
     autonomous_drive()
@@ -106,5 +125,5 @@ try:
 except KeyboardInterrupt:
     print("Program interrupted by user.")
 finally:
-    cleanup()
+    cleanup()  # Clean up GPIO and release resources
     print("GPIO cleaned up and program ended.")
